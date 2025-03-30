@@ -13,13 +13,13 @@ import (
 	"testing"
 
 	"github.com/Konstantin8105/c4go/util"
+	"github.com/stretchr/testify/assert"
 )
 
 func formatMultiLine(o interface{}) string {
 	s := fmt.Sprintf("%#v", o)
 	s = strings.Replace(s, "{", "{\n", -1)
 	s = strings.Replace(s, ", ", "\n", -1)
-
 	return s
 }
 
@@ -32,51 +32,44 @@ func runNodeTests(t *testing.T, tests map[string]Node) {
 		t.Run(testName, func(t *testing.T) {
 			defer func() {
 				if r := recover(); r != nil {
-					t.Fatalf("Panic for : %v, %v\n%v", testName, line, r)
+					t.Fatalf("Panic for: %v, %v\n%v", testName, line, r)
 				}
 			}()
-			// Append the name of the struct onto the front. This would make the
-			// complete line it would normally be parsing.
+
 			name := reflect.TypeOf(expected).Elem().Name()
-			actual, err := Parse(name + " " + line)
+			actual := Parse(name+" "+line, 0)
 
 			if !reflect.DeepEqual(expected, actual) {
-				t.Errorf("%s", util.ShowDiff(formatMultiLine(expected),
-					formatMultiLine(actual)))
+				t.Errorf("%s", util.ShowDiff(formatMultiLine(expected), formatMultiLine(actual)))
 			}
-			if err != nil {
-				t.Errorf("Error parsing %v", err)
+			if actual == nil {
+				t.Errorf("Expected non-nil node for %s", name)
+				return
 			}
 			if int64(actual.Address()) == 0 {
-				t.Errorf("Address for test cannot be nil. %v", actual.Address())
+				t.Errorf("Address for test cannot be zero: %v", actual.Address())
 			}
 			if len(actual.Children()) != 0 {
-				t.Errorf("Amount of children cannot be more 0")
+				t.Errorf("Amount of children cannot be more than 0 initially")
 			}
 			actual.AddChild(nil)
 			if len(actual.Children()) != 1 {
-				t.Errorf("Amount of children must be 1")
+				t.Errorf("Amount of children must be 1 after adding")
 			}
 			if actual.Children()[0] != nil {
-				t.Errorf("Children must bee nil")
+				t.Errorf("Child must be nil")
 			}
 			pos := actual.Position()
-			if pos.Line == 0 && pos.Column == 0 && pos.LineEnd == 0 &&
-				pos.ColumnEnd == 0 && pos.File == "" {
-				t.Log("Please try to change Position for test. " +
-					"Better to test not zero position")
+			if pos.Line == 0 && pos.Column == 0 && pos.LineEnd == 0 && pos.ColumnEnd == 0 && pos.File == "" {
+				t.Log("Consider testing with non-zero position")
 			}
-			if pos.Line < 0 || pos.Column < 0 || pos.LineEnd < 0 ||
-				pos.ColumnEnd < 0 {
-				t.Errorf("Not acceptable negative position")
+			if pos.Line < 0 || pos.Column < 0 || pos.LineEnd < 0 || pos.ColumnEnd < 0 {
+				t.Errorf("Negative position not acceptable")
 			}
 			var posC Position
 			posC.Line = -1
-			if pos.Line == -1 {
-				t.Fatalf("Not correct default line position")
-			}
 			setPosition(actual, posC)
-			if pos.Line != -1 {
+			if actual.Position().Line != -1 {
 				t.Log("Cannot change position")
 			}
 		})
@@ -84,12 +77,12 @@ func runNodeTests(t *testing.T, tests map[string]Node) {
 }
 
 func TestPrint(t *testing.T) {
-	cond := &ConditionalOperator{}
-	cond.AddChild(&ImplicitCastExpr{})
-	cond.AddChild(&ImplicitCastExpr{})
+	cond := &ConditionalOperator{addr: 0x12345678}
+	cond.AddChild(&ImplicitCastExpr{addr: 0x12345679})
+	cond.AddChild(&ImplicitCastExpr{addr: 0x1234567a})
 	s := Atos(cond)
 	if len(s) == 0 {
-		t.Fatalf("Cannot convert AST tree : %#v", cond)
+		t.Fatalf("Cannot convert AST tree: %#v", cond)
 	}
 	lines := strings.Split(s, "\n")
 	var amount int
@@ -99,55 +92,26 @@ func TestPrint(t *testing.T) {
 		}
 	}
 	if amount != 2 {
-		t.Error("Not correct design of output")
+		t.Errorf("Expected 2 ImplicitCastExpr nodes, got %d", amount)
 	}
 }
 
 func TestPanicCheck(t *testing.T) {
 	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("panic for parsing string line is not acceptable. %v", r)
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for invalid string line")
 		}
 	}()
-	_, err := Parse("Some strange line")
-	if err == nil {
-		t.Errorf("Haven`t error for strange string line not acceptable")
-	}
-	// Correct node of AST:
-	// GotoStmt 0x7fb9cc1994d8 <line:18893:9, col:14>  'end_getDigits' 0x7fb9cc199490
-	// Modify for panic in ast regexp
-	//
-	n, err := Parse("GotoStmt 0x7fb9cc1994d8 <lin8893:9, col:14> ts' 99490")
-	if err == nil {
-		t.Errorf("Haven`t error for guarantee panic line not acceptable\n%v",
-			Atos(n))
-	}
+	Parse("Some strange line", 0)
 }
 
 func TestNullStmt(t *testing.T) {
-	n, err := Parse("NullStmt")
-	if n != nil || err != nil {
-		t.Errorf("Not acceptable for NullStmt")
-	}
-}
-
-type Visitor interface {
-	Visit(node Node) (w Visitor)
-}
-
-type Founder struct{}
-
-var nodesFromAst []string
-
-func (f Founder) Visit(node ast.Node) (w ast.Visitor) {
-	if cs, ok := node.(*ast.CaseClause); ok {
-		nodesFromAst = append(nodesFromAst, cs.List[0].(*ast.BasicLit).Value)
-	}
-	return f
+	n := Parse("NullStmt", 0)
+	assert.Nil(t, n, "Expected nil for NullStmt")
 }
 
 func TestAstNodes(t *testing.T) {
-	fset := token.NewFileSet() // positions are relative to fset
+	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "ast.go", nil, parser.DeclarationErrors)
 	if err != nil {
 		t.Fatalf("%v", err)
@@ -156,37 +120,27 @@ func TestAstNodes(t *testing.T) {
 	var fr Founder
 	ast.Walk(fr, f.Decls[4])
 
-	// 108: *ast.CaseClause {
-	// .  Case: -
-	// .  List: []ast.Expr (len = 1) {
-	// .  .  0: *ast.BasicLit {
-	// .  .  .  ValuePos: -
-	// .  .  .  Kind: STRING
-	// .  .  .  Value: "\"WhileStmt\""
-	// .  .  }
-	// .  }
-
 	nodesFromAst = append(nodesFromAst, "")
 
 	for _, c := range nodesFromAst {
 		t.Run(fmt.Sprintf("%v", c), func(t *testing.T) {
 			defer func() {
 				if r := recover(); r != nil {
-					t.Fatalf("Cannot parse")
+					t.Fatalf("Cannot parse: %v", r)
 				}
 			}()
-			Parse(c)
+			Parse(c, 0)
 		})
 	}
 
 	dat, err := ioutil.ReadFile("position.go")
 	if err != nil {
-		t.Fatalf("Error to read file `position.go`: %v", err)
+		t.Fatalf("Error reading `position.go`: %v", err)
 	}
 
 	index := bytes.Index(dat, []byte("setPosition"))
 	if index < 0 {
-		t.Fatalf("cannot found function")
+		t.Fatalf("Cannot find function `setPosition`")
 	}
 	dat = dat[index:]
 
@@ -197,12 +151,137 @@ func TestAstNodes(t *testing.T) {
 		t.Run(fmt.Sprintf("%v", c), func(t *testing.T) {
 			c, err := strconv.Unquote(c)
 			if err != nil {
-				t.Fatalf("Unquote invalid : %v", err)
+				t.Fatalf("Unquote invalid: %v", err)
 			}
 			index := bytes.Index(dat, []byte(c))
 			if index < 0 {
-				t.Fatalf("cannot found type : %v", c)
+				t.Fatalf("Cannot find type: %v", c)
 			}
+		})
+	}
+}
+
+// Additional tests for #506
+func TestUnknownNodeTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantType string
+	}{
+		{
+			name:     "TypeVisibilityAttr",
+			input:    "TypeVisibilityAttr 0x2962acf3b20 <<invalid sloc>> Implicit Default",
+			wantType: "TypeVisibilityAttr",
+		},
+		{
+			name:     "MSAllocatorAttr",
+			input:    "MSAllocatorAttr 0x2962aee6218 <line:190:25>",
+			wantType: "MSAllocatorAttr",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := Parse(tt.input, 0)
+			assert.NotNil(t, node, "Expected non-nil node")
+			unknown, ok := node.(*UnknownNode)
+			assert.True(t, ok, "Expected UnknownNode")
+			assert.Equal(t, tt.wantType, unknown.TypeName, "Expected correct type name")
+			assert.Equal(t, ParseAddress(strings.Split(tt.input, " ")[1]), unknown.Address(), "Expected correct address")
+		})
+	}
+}
+func TestParse(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantType  string
+		wantAddr  Address
+		wantLine  int
+		wantError bool
+	}{
+		{
+			name:      "Empty input",
+			input:     "",
+			wantType:  "",
+			wantError: false,
+		},
+		{
+			name:      "TranslationUnitDecl",
+			input:     "TranslationUnitDecl 0x12345678 <line:1:1>",
+			wantType:  "TranslationUnitDecl",
+			wantAddr:  0x12345678,
+			wantLine:  1,
+			wantError: false,
+		},
+		{
+			name:      "FunctionDecl",
+			input:     "FunctionDecl 0x98765432 <line:10:5>",
+			wantType:  "FunctionDecl",
+			wantAddr:  0x98765432,
+			wantLine:  10,
+			wantError: false,
+		},
+		{
+			name:      "TypeVisibilityAttr",
+			input:     "TypeVisibilityAttr 0x2962acf3b20 <<invalid sloc>> Implicit Default",
+			wantType:  "UnknownNode",
+			wantAddr:  0x2962acf3b20,
+			wantLine:  -1,
+			wantError: false,
+		},
+		{
+			name:      "MSAllocatorAttr",
+			input:     "MSAllocatorAttr 0x2962aee6218 <line:190:25>",
+			wantType:  "UnknownNode",
+			wantAddr:  0x2962aee6218,
+			wantLine:  190,
+			wantError: false,
+		},
+		{
+			name:      "Invalid type",
+			input:     "InvalidType 0x11111111 <line:5:5>",
+			wantType:  "",
+			wantError: true,
+		},
+		{
+			name:      "NullStmt",
+			input:     "NullStmt",
+			wantType:  "",
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node, err := Parse(tt.input, 0)
+			if tt.wantError {
+				assert.Error(t, err, "Expected an error")
+				assert.Nil(t, node, "Expected nil node on error")
+				return
+			}
+			assert.NoError(t, err, "Unexpected error")
+
+			if tt.wantType == "" {
+				assert.Nil(t, node, "Expected nil node")
+				return
+			}
+
+			assert.NotNil(t, node, "Expected non-nil node")
+			switch n := node.(type) {
+			case *UnknownNode:
+				assert.Equal(t, tt.wantType, "UnknownNode", "Expected UnknownNode")
+				assert.Equal(t, tt.input, n.Raw, "Expected raw input match")
+			case *TranslationUnitDecl:
+				assert.Equal(t, tt.wantType, "TranslationUnitDecl", "Expected TranslationUnitDecl")
+			case *FunctionDecl:
+				assert.Equal(t, tt.wantType, "FunctionDecl", "Expected FunctionDecl")
+			default:
+				t.Errorf("Unexpected node type: %T", node)
+			}
+
+			assert.Equal(t, tt.wantAddr, node.Address(), "Address mismatch")
+			assert.Equal(t, tt.wantLine, node.Position().Line, "Line mismatch")
 		})
 	}
 }

@@ -5,9 +5,8 @@ require (
 	github.com/Konstantin8105/errors v0.1.0
 	github.com/Konstantin8105/tree v0.1.1 // indirect
 	github.com/bradleyjkemp/cupaloy v2.3.0+incompatible
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pkg/term v0.0.0-20190109203006-aa71e9d9e942
-	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/stretchr/testify v1.10.0
 	golang.org/x/sys v0.1.0
 )
 
