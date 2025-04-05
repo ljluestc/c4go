@@ -113,6 +113,7 @@ type FilePP struct {
 	pp       []byte
 	comments []Comment
 	includes []IncludeHeader
+	defines  map[string]string
 }
 
 // NewFilePP create a struct FilePP with results of analyzing
@@ -201,6 +202,76 @@ func NewFilePP(inputFiles, clangFlags []string, cppCode bool) (f FilePP, err err
 	}
 
 	f.pp = []byte(strings.Join(lines, "\n"))
+
+	// Correct include names for external includes (restored original logic)
+	{
+		for i := range f.includes {
+			f.includes[i].BaseHeaderName = f.includes[i].HeaderName
+		}
+		var ier []string
+		ier, err = GetIeraphyIncludeList(inputFiles, clangFlags, cppCode)
+		if err != nil {
+			return
+		}
+
+		// Cut lines without pattern ". "
+	again:
+		for i := range ier {
+			remove := false
+			if len(ier[i]) == 0 {
+				remove = true
+			} else if ier[i][0] != '.' {
+				remove = true
+			} else if index := strings.Index(ier[i], ". "); index < 0 {
+				remove = true
+			}
+			if remove {
+				ier = append(ier[:i], ier[i+1:]...)
+				goto again
+			}
+		}
+
+		separator := func(line string) (level int, name string) {
+			for i := range line {
+				if line[i] == ' ' {
+					level = i
+					break
+				}
+			}
+			name = line[level+1:]
+			return
+		}
+
+		for i := range f.includes {
+			if f.includes[i].IsUserSource {
+				continue
+			}
+			var pos int = -1
+			for j := range ier {
+				if strings.Contains(ier[j], f.includes[i].BaseHeaderName) {
+					pos = j
+					break
+				}
+			}
+			if pos < 0 {
+				continue
+			}
+
+			level, _ := separator(ier[pos])
+			for j := pos; j >= 0; j-- {
+				levelJ, nameJ := separator(ier[j])
+				if levelJ >= level {
+					continue
+				}
+				if f.IsUserSource(nameJ) {
+					break
+				}
+				f.includes[i].BaseHeaderName = nameJ
+				level = levelJ
+			}
+		}
+	}
+
 	return
 }
 
@@ -242,7 +313,6 @@ func analyzeFiles(inputFiles, clangFlags []string, cppCode bool, f *FilePP) (ite
 			if len(matches) == 3 {
 				name := matches[1]
 				value := matches[2]
-				// Store specific constants we care about
 				switch name {
 				case "T_EOF", "T_SPACE", "T_TAB":
 					f.defines[name] = value
