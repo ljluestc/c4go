@@ -117,160 +117,148 @@ type FilePP struct {
 
 // NewFilePP create a struct FilePP with results of analyzing
 // preprocessor C code
-func NewFilePP(inputFiles, clangFlags []string, cppCode bool) (
-	f FilePP, err error) {
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("preprocess error : %v", err)
-		}
-	}()
+func NewFilePP(inputFiles, clangFlags []string, cppCode bool) (f FilePP, err error) {
+    defer func() {
+        if err != nil {
+            err = fmt.Errorf("preprocess error : %v", err)
+        }
+    }()
 
-	var allItems []entity
+    f.defines = make(map[string]string) // Initialize defines map
 
-	allItems, err = analyzeFiles(inputFiles, clangFlags, cppCode)
-	if err != nil {
-		return
-	}
+    var allItems []entity
+    allItems, err = analyzeFiles(inputFiles, clangFlags, cppCode, &f) // Pass FilePP to store defines
+    if err != nil {
+        return
+    }
 
-	// Generate list of user files
-	userSource := map[string]bool{}
-	var us []string
-	us, err = GetIncludeListWithUserSource(inputFiles, clangFlags, cppCode)
-	if err != nil {
-		return
-	}
-	var all []string
-	all, err = GetIncludeFullList(inputFiles, clangFlags, cppCode)
-	if err != nil {
-		return
-	}
+    // Generate list of user files
+    userSource := map[string]bool{}
+    var us []string
+    us, err = GetIncludeListWithUserSource(inputFiles, clangFlags, cppCode)
+    if err != nil {
+        return
+    }
+    var all []string
+    all, err = GetIncludeFullList(inputFiles, clangFlags, cppCode)
+    if err != nil {
+        return
+    }
 
-	// Generate C header list
-	f.includes = generateIncludeList(us, all)
+    // Generate C header list
+    f.includes = generateIncludeList(us, all)
 
-	for j := range us {
-		userSource[us[j]] = true
-	}
+    for j := range us {
+        userSource[us[j]] = true
+    }
 
-	// Merge the entities
-	var lines []string
-	for i := range allItems {
-		// If found same part of preprocess code, then
-		// don't include in result buffer for transpiling
-		// for avoid duplicate of code
-		var found bool
-		for j := 0; j < i; j++ {
-			if allItems[i].isSame(&allItems[j]) {
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-		// Parse comments only for user sources
-		var isUserSource bool
-		if userSource[allItems[i].include] {
-			isUserSource = true
-		}
-		if allItems[i].include[0] == '.' &&
-			allItems[i].include[1] == '/' &&
-			userSource[allItems[i].include[2:]] {
-			isUserSource = true
-		}
-		if isUserSource {
-			allItems[i].parseComments(&f.comments)
-		}
+    // Merge the entities and generate preprocessor output
+    var lines []string
+    for i := range allItems {
+        var found bool
+        for j := 0; j < i; j++ {
+            if allItems[i].isSame(&allItems[j]) {
+                found = true
+                break
+            }
+        }
+        if found {
+            continue
+        }
 
-		// Parameter "other" is not included for avoid like:
-		// ./tests/multi/head.h:4:28: error: invalid line marker flag '2': \
-		// cannot pop empty include stack
-		// # 2 "./tests/multi/main.c" 2
-		//                            ^
-		header := fmt.Sprintf("# %d \"%s\"",
-			allItems[i].positionInSource, allItems[i].include)
-		lines = append(lines, header)
-		if len(allItems[i].lines) > 0 {
-			for ii, l := range allItems[i].lines {
-				if ii == 0 {
-					continue
-				}
-				lines = append(lines, *l)
-			}
-		}
-		f.entities = append(f.entities, allItems[i])
-	}
-	f.pp = ([]byte)(strings.Join(lines, "\n"))
+        // Parse comments only for user sources
+        var isUserSource bool
+        if userSource[allItems[i].include] {
+            isUserSource = true
+        }
+        if allItems[i].include[0] == '.' && allItems[i].include[1] == '/' && userSource[allItems[i].include[2:]] {
+            isUserSource = true
+        }
+        if isUserSource {
+            allItems[i].parseComments(&f.comments)
+        }
 
-	{
-		for i := range f.includes {
-			f.includes[i].BaseHeaderName = f.includes[i].HeaderName
-		}
-		// correct include names only for external Includes
-		var ier []string
-		ier, err = GetIeraphyIncludeList(inputFiles, clangFlags, cppCode)
+        header := fmt.Sprintf("# %d \"%s\"", allItems[i].positionInSource, allItems[i].include)
+        lines = append(lines, header)
+        if len(allItems[i].lines) > 0 {
+            for ii, l := range allItems[i].lines {
+                if ii == 0 {
+                    continue
+                }
+                lines = append(lines, *l)
+            }
+        }
+        f.entities = append(f.entities, allItems[i])
+    }
 
-		// cut lines without pattern ". "
-	again:
-		for i := range ier {
-			remove := false
-			if len(ier[i]) == 0 {
-				remove = true
-			} else if ier[i][0] != '.' {
-				remove = true
-			} else if index := strings.Index(ier[i], ". "); index < 0 {
-				remove = true
-			}
-			if remove {
-				ier = append(ier[:i], ier[i+1:]...)
-				goto again
-			}
-		}
+    // Add constants to the output
+    if len(f.defines) > 0 {
+        var constLines []string
+        for name, value := range f.defines {
+            constLines = append(constLines, fmt.Sprintf("%s = %s", name, value))
+        }
+        lines = append([]string{"const (", "\t" + strings.Join(constLines, "\n\t"), ")"}, lines...)
+    }
 
-		separator := func(line string) (level int, name string) {
-			for i := range line {
-				if line[i] == ' ' {
-					level = i
-					break
-				}
-			}
-			name = line[level+1:]
-			return
-		}
+    f.pp = []byte(strings.Join(lines, "\n"))
+    return
+}
 
-		for i := range f.includes {
-			if f.includes[i].IsUserSource {
-				continue
-			}
-			// find position in Include ierarphy
-			var pos int = -1
-			for j := range ier {
-				if strings.Contains(ier[j], f.includes[i].BaseHeaderName) {
-					pos = j
-					break
-				}
-			}
-			if pos < 0 {
-				continue
-			}
 
-			// find level of line
-			level, _ := separator(ier[pos])
+// analyzeFiles - analyze single file and separation preprocessor code to parts
+func analyzeFiles(inputFiles, clangFlags []string, cppCode bool, f *FilePP) (items []entity, err error) {
+    var out bytes.Buffer
+    out, err = getPreprocessSources(inputFiles, clangFlags, cppCode)
+    if err != nil {
+        return
+    }
 
-			for j := pos; j >= 0; j-- {
-				levelJ, nameJ := separator(ier[j])
-				if levelJ >= level {
-					continue
-				}
-				if f.IsUserSource(nameJ) {
-					break
-				}
-				f.includes[i].BaseHeaderName = nameJ
-				level = levelJ
-			}
-		}
-	}
-	return
+    r := bytes.NewReader(out.Bytes())
+    scanner := bufio.NewScanner(r)
+    scanner.Split(bufio.ScanLines)
+
+    var counter int
+    var item *entity
+    reg := util.GetRegex("# (\\d+) \".*\".*")
+    defineReg := util.GetRegex(`#define\s+(\w+)\s+([^\s]+)`)
+
+    for scanner.Scan() {
+        line := scanner.Text()
+        if reg.MatchString(line) {
+            if item != nil {
+                items = append(items, *item)
+            }
+            item, err = parseIncludePreprocessorLine(line)
+            if err != nil {
+                err = fmt.Errorf("cannot parse line : %s with error: %s", line, err)
+                return
+            }
+            if item.positionInSource == 0 {
+                item.positionInSource = 1
+            }
+            item.lines = make([]*string, 0)
+        } else if defineReg.MatchString(line) {
+            // Handle #define directives
+            matches := defineReg.FindStringSubmatch(line)
+            if len(matches) == 3 {
+                name := matches[1]
+                value := matches[2]
+                // Store specific constants we care about
+                switch name {
+                case "T_EOF", "T_SPACE", "T_TAB":
+                    f.defines[name] = value
+                }
+            }
+        }
+        counter++
+        if item != nil {
+            item.lines = append(item.lines, &line)
+        }
+    }
+    if item != nil {
+        items = append(items, *item)
+    }
+    return
 }
 
 // GetSource return source of preprocessor C code
